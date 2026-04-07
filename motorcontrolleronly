@@ -2,26 +2,59 @@
 //  ContentView.swift
 //  ChickenAppiOS
 //
-//  Created by Somer Hanna on 3/18/26.
+//  Created by Chicken Door App
 //
 
 import SwiftUI
 import CoreBluetooth
 
-// MARK: - BLE Manager with Auto-Connect
+// MARK: - Schedule Model
+struct DoorSchedule: Codable {
+    var openTime: Date
+    var closeTime: Date
+    var isEnabled: Bool
+    
+    var openHour: Int {
+        Calendar.current.component(.hour, from: openTime)
+    }
+    var openMinute: Int {
+        Calendar.current.component(.minute, from: openTime)
+    }
+    var closeHour: Int {
+        Calendar.current.component(.hour, from: closeTime)
+    }
+    var closeMinute: Int {
+        Calendar.current.component(.minute, from: closeTime)
+    }
+    
+    func toString() -> String {
+        return "\(openHour),\(openMinute),\(closeHour),\(closeMinute),\(isEnabled ? 1 : 0)"
+    }
+}
+
+// MARK: - BLE Manager
 class BLEManager: NSObject, ObservableObject {
     private var centralManager: CBCentralManager!
     private var peripheral: CBPeripheral?
-    private var characteristic: CBCharacteristic?
+    private var motorCharacteristic: CBCharacteristic?
+    private var scheduleCharacteristic: CBCharacteristic?
     
     @Published var isConnected = false
-    @Published var connectionStatus = "Searching for ESP32-LED..."
+    @Published var connectionStatus = "Scanning for Chicken-Door..."
     @Published var lastCommand = ""
     @Published var motorStatus = "IDLE"
+    @Published var topLimit = "OK"
+    @Published var bottomLimit = "OK"
+    @Published var doorSchedule = DoorSchedule(
+        openTime: Calendar.current.date(from: DateComponents(hour: 6, minute: 0)) ?? Date(),
+        closeTime: Calendar.current.date(from: DateComponents(hour: 18, minute: 0)) ?? Date(),
+        isEnabled: true
+    )
     
-    // UUIDs must match the ESP32 sketch
+    // BLE UUIDs
     let serviceUUID = CBUUID(string: "4fafc201-1fb5-459e-8fcc-c5c9c331914b")
-    let characteristicUUID = CBUUID(string: "beb5483e-36e1-4688-b7f5-ea07361b26a8")
+    let motorUUID = CBUUID(string: "beb5483e-36e1-4688-b7f5-ea07361b26a8")
+    let scheduleUUID = CBUUID(string: "2a5c6d8e-1fb5-459e-8fcc-c5c9c331914b")
     
     // Auto-reconnect variables
     private var isScanning = false
@@ -35,9 +68,9 @@ class BLEManager: NSObject, ObservableObject {
     
     func sendCommand(_ command: String) {
         guard let peripheral = peripheral,
-              let characteristic = characteristic,
+              let characteristic = motorCharacteristic,
               isConnected else {
-            connectionStatus = "Not connected - auto-reconnecting..."
+            connectionStatus = "Not connected - reconnecting..."
             return
         }
         
@@ -46,10 +79,30 @@ class BLEManager: NSObject, ObservableObject {
         lastCommand = command
         connectionStatus = "Sent: \(command)"
         
-        // Reset after 2 seconds
+        // Reset status message after 2 seconds
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
             if self.isConnected {
-                self.connectionStatus = "Connected - Ready"
+                self.connectionStatus = "Connected ✓"
+            }
+        }
+    }
+    
+    func sendSchedule() {
+        guard let peripheral = peripheral,
+              let characteristic = scheduleCharacteristic,
+              isConnected else {
+            return
+        }
+        
+        let scheduleString = doorSchedule.toString()
+        let data = scheduleString.data(using: .utf8)!
+        peripheral.writeValue(data, for: characteristic, type: .withResponse)
+        connectionStatus = "Schedule saved!"
+        print("📤 Schedule sent: \(scheduleString)")
+        
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            if self.isConnected {
+                self.connectionStatus = "Connected ✓"
             }
         }
     }
@@ -58,12 +111,12 @@ class BLEManager: NSObject, ObservableObject {
         guard !isScanning, centralManager.state == .poweredOn else { return }
         
         isScanning = true
-        connectionStatus = "Scanning for ESP32-LED..."
+        connectionStatus = "Scanning for Chicken-Door..."
         centralManager.scanForPeripherals(withServices: [serviceUUID], options: [
             CBCentralManagerScanOptionAllowDuplicatesKey: false
         ])
         
-        // Stop scanning after 10 seconds and retry if needed
+        // Stop scanning after 10 seconds and retry
         DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in
             self?.stopScanAndRetry()
         }
@@ -82,7 +135,7 @@ class BLEManager: NSObject, ObservableObject {
                 self?.startAutoScan()
             }
         } else if !isConnected {
-            connectionStatus = "ESP32-LED not found - check power"
+            connectionStatus = "Not found - check device"
         }
     }
     
@@ -101,13 +154,14 @@ extension BLEManager: CBCentralManagerDelegate {
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
         switch central.state {
         case .poweredOn:
-            connectionStatus = "Bluetooth on - searching..."
+            connectionStatus = "Bluetooth ON - searching..."
             startAutoScan()
         case .poweredOff:
             isConnected = false
-            connectionStatus = "Bluetooth is off - please enable"
+            connectionStatus = "Bluetooth OFF - please enable"
             peripheral = nil
-            characteristic = nil
+            motorCharacteristic = nil
+            scheduleCharacteristic = nil
         case .unauthorized:
             connectionStatus = "Bluetooth permission denied"
         case .unsupported:
@@ -118,8 +172,8 @@ extension BLEManager: CBCentralManagerDelegate {
     }
     
     func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral, advertisementData: [String : Any], rssi RSSI: NSNumber) {
-        if peripheral.name == "ESP32-LED" {
-            print("✅ Found ESP32-LED - connecting...")
+        if peripheral.name == "Chicken-Door" {
+            print("✅ Found Chicken-Door - connecting...")
             connectToDevice(peripheral)
         }
     }
@@ -127,8 +181,8 @@ extension BLEManager: CBCentralManagerDelegate {
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
         isConnected = true
         reconnectAttempts = 0
-        connectionStatus = "Connected! Ready"
-        print("✅ Connected to ESP32-LED")
+        connectionStatus = "Connected ✓"
+        print("✅ Connected to Chicken-Door")
         peripheral.discoverServices([serviceUUID])
     }
     
@@ -144,7 +198,8 @@ extension BLEManager: CBCentralManagerDelegate {
         connectionStatus = "Disconnected - reconnecting..."
         print("❌ Disconnected - auto-reconnecting")
         self.peripheral = nil
-        self.characteristic = nil
+        self.motorCharacteristic = nil
+        self.scheduleCharacteristic = nil
         startAutoScan()
     }
 }
@@ -159,7 +214,7 @@ extension BLEManager: CBPeripheralDelegate {
         if let services = peripheral.services {
             for service in services {
                 if service.uuid == serviceUUID {
-                    peripheral.discoverCharacteristics([characteristicUUID], for: service)
+                    peripheral.discoverCharacteristics([motorUUID, scheduleUUID], for: service)
                 }
             }
         }
@@ -173,20 +228,26 @@ extension BLEManager: CBPeripheralDelegate {
         
         if let characteristics = service.characteristics {
             for characteristic in characteristics {
-                if characteristic.uuid == characteristicUUID {
-                    self.characteristic = characteristic
-                    connectionStatus = "Ready to control motor"
-                    print("✅ Ready to control motor")
+                if characteristic.uuid == motorUUID {
+                    self.motorCharacteristic = characteristic
                     peripheral.setNotifyValue(true, for: characteristic)
+                    print("✅ Motor control ready")
+                }
+                if characteristic.uuid == scheduleUUID {
+                    self.scheduleCharacteristic = characteristic
+                    peripheral.setNotifyValue(true, for: characteristic)
+                    peripheral.readValue(for: characteristic)
+                    print("✅ Schedule control ready")
                 }
             }
+            connectionStatus = "Ready to control 🐔"
         }
     }
     
     func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
         if let error = error {
             print("Write error: \(error)")
-            connectionStatus = "Command failed - retrying..."
+            connectionStatus = "Command failed"
         } else {
             print("✅ Command sent successfully")
         }
@@ -199,10 +260,50 @@ extension BLEManager: CBPeripheralDelegate {
         }
         
         if let value = characteristic.value {
-            let statusString = String(data: value, encoding: .utf8) ?? ""
-            if statusString.hasPrefix("STATUS:") {
-                motorStatus = String(statusString.dropFirst(7))
-                print("Motor status: \(motorStatus)")
+            let stringValue = String(data: value, encoding: .utf8) ?? ""
+            
+            if characteristic.uuid == motorUUID {
+                // Parse status: "STATUS:IDLE,TOP:OK,BOTTOM:OK"
+                let parts = stringValue.split(separator: ",")
+                for part in parts {
+                    if part.hasPrefix("STATUS:") {
+                        motorStatus = String(part.dropFirst(7))
+                    } else if part.hasPrefix("TOP:") {
+                        topLimit = String(part.dropFirst(4))
+                    } else if part.hasPrefix("BOTTOM:") {
+                        bottomLimit = String(part.dropFirst(7))
+                    }
+                }
+                print("📊 Status: \(motorStatus) | Top: \(topLimit) | Bottom: \(bottomLimit)")
+            }
+            else if characteristic.uuid == scheduleUUID {
+                // Parse schedule: "6,0,18,0,1"
+                let components = stringValue.split(separator: ",")
+                if components.count == 5 {
+                    if let openHour = Int(components[0]),
+                       let openMinute = Int(components[1]),
+                       let closeHour = Int(components[2]),
+                       let closeMinute = Int(components[3]),
+                       let enabled = Int(components[4]) {
+                        
+                        var calendar = Calendar.current
+                        let now = Date()
+                        var openComponents = calendar.dateComponents([.year, .month, .day], from: now)
+                        openComponents.hour = openHour
+                        openComponents.minute = openMinute
+                        
+                        var closeComponents = calendar.dateComponents([.year, .month, .day], from: now)
+                        closeComponents.hour = closeHour
+                        closeComponents.minute = closeMinute
+                        
+                        DispatchQueue.main.async {
+                            self.doorSchedule.openTime = calendar.date(from: openComponents) ?? Date()
+                            self.doorSchedule.closeTime = calendar.date(from: closeComponents) ?? Date()
+                            self.doorSchedule.isEnabled = enabled == 1
+                        }
+                        print("📅 Schedule loaded: Open at \(openHour):\(openMinute), Close at \(closeHour):\(closeMinute)")
+                    }
+                }
             }
         }
     }
@@ -211,128 +312,245 @@ extension BLEManager: CBPeripheralDelegate {
 // MARK: - Main View
 struct ContentView: View {
     @StateObject private var bleManager = BLEManager()
-    @State private var showingAlert = false
-    @State private var alertMessage = ""
     
     var body: some View {
-        ZStack {
-            // Background gradient
-            LinearGradient(
-                colors: [
-                    Color.blue.opacity(0.3),
-                    Color.green.opacity(0.2),
-                    Color.white
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            .ignoresSafeArea()
-            
-            // Main Content
-            VStack(spacing: 25) {
-                // Header
-                VStack(spacing: 10) {
-                    Text("🐔 Chicken Door")
-                        .font(.system(size: 45, weight: .bold))
-                        .foregroundColor(.blue)
-                    
-                    Text("Motor Controller")
-                        .font(.title3)
-                        .foregroundColor(.brown)
-                    
-                    // Connection Status
-                    VStack(spacing: 8) {
-                        HStack {
-                            Circle()
-                                .fill(bleManager.isConnected ? Color.green : Color.yellow)
-                                .frame(width: 12, height: 12)
-                            Text(bleManager.connectionStatus)
+        NavigationView {
+            ZStack {
+                // Background gradient
+                LinearGradient(
+                    colors: [
+                        Color.blue.opacity(0.3),
+                        Color.green.opacity(0.2),
+                        Color.orange.opacity(0.1)
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+                .ignoresSafeArea()
+                
+                ScrollView {
+                    VStack(spacing: 20) {
+                        // Header Section
+                        VStack(spacing: 10) {
+                            Text("🐔 Chicken Door")
+                                .font(.system(size: 45, weight: .bold))
+                                .foregroundColor(.blue)
+                            
+                            Text("Smart Motor Controller")
+                                .font(.title3)
+                                .foregroundColor(.brown)
+                            
+                            // Connection Status Card
+                            VStack(spacing: 8) {
+                                HStack {
+                                    Circle()
+                                        .fill(bleManager.isConnected ? Color.green : Color.red)
+                                        .frame(width: 10, height: 10)
+                                    Text(bleManager.connectionStatus)
+                                        .font(.caption)
+                                        .foregroundColor(.gray)
+                                }
+                                
+                                // Motor Status
+                                if bleManager.isConnected {
+                                    HStack(spacing: 15) {
+                                        StatusBadge(title: "Motor", value: bleManager.motorStatus, color: .blue)
+                                        StatusBadge(title: "Top Limit", value: bleManager.topLimit, color: .orange)
+                                        StatusBadge(title: "Bottom Limit", value: bleManager.bottomLimit, color: .orange)
+                                    }
+                                }
+                            }
+                            .padding(.horizontal)
+                            .padding(.vertical, 10)
+                            .background(Color.white.opacity(0.7))
+                            .cornerRadius(15)
+                        }
+                        .padding(.top, 10)
+                        
+                        // Manual Control Section
+                        VStack(spacing: 15) {
+                            Text("Manual Control")
+                                .font(.title2)
+                                .fontWeight(.semibold)
+                                .foregroundColor(.brown)
+                            
+                            HStack(spacing: 15) {
+                                // Open Button
+                                MotorButton(
+                                    title: "OPEN",
+                                    icon: "arrow.up.circle.fill",
+                                    color: .green,
+                                    isEnabled: bleManager.isConnected && bleManager.topLimit != "ACTIVE"
+                                ) {
+                                    bleManager.sendCommand("forward")
+                                }
+                                
+                                // Stop Button
+                                MotorButton(
+                                    title: "STOP",
+                                    icon: "stop.circle.fill",
+                                    color: .red,
+                                    isEnabled: bleManager.isConnected
+                                ) {
+                                    bleManager.sendCommand("stop")
+                                }
+                                
+                                // Close Button
+                                MotorButton(
+                                    title: "CLOSE",
+                                    icon: "arrow.down.circle.fill",
+                                    color: .orange,
+                                    isEnabled: bleManager.isConnected && bleManager.bottomLimit != "ACTIVE"
+                                ) {
+                                    bleManager.sendCommand("reverse")
+                                }
+                            }
+                            .padding(.horizontal)
+                        }
+                        .padding(.vertical)
+                        .background(Color.white.opacity(0.5))
+                        .cornerRadius(20)
+                        .padding(.horizontal)
+                        
+                        // Automatic Schedule Section
+                        VStack(spacing: 15) {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("Automatic Schedule")
+                                        .font(.title2)
+                                        .fontWeight(.semibold)
+                                        .foregroundColor(.brown)
+                                    
+                                    Text("Door opens/closes automatically")
+                                        .font(.caption)
+                                        .foregroundColor(.gray)
+                                }
+                                
+                                Spacer()
+                                
+                                Toggle("", isOn: $bleManager.doorSchedule.isEnabled)
+                                    .onChange(of: bleManager.doorSchedule.isEnabled) { oldValue, newValue in
+                                        bleManager.sendSchedule()
+                                    }
+                                    .labelsHidden()
+                            }
+                            .padding(.horizontal)
+                            
+                            if bleManager.doorSchedule.isEnabled {
+                                VStack(spacing: 15) {
+                                    // Open Time Picker
+                                    TimePickerRow(
+                                        title: "Open Time",
+                                        icon: "sunrise.fill",
+                                        color: .orange,
+                                        time: $bleManager.doorSchedule.openTime
+                                    ) {
+                                        bleManager.sendSchedule()
+                                    }
+                                    
+                                    // Close Time Picker
+                                    TimePickerRow(
+                                        title: "Close Time",
+                                        icon: "sunset.fill",
+                                        color: .purple,
+                                        time: $bleManager.doorSchedule.closeTime
+                                    ) {
+                                        bleManager.sendSchedule()
+                                    }
+                                }
+                                .padding(.horizontal)
+                            } else {
+                                Text("Schedule disabled - use manual controls")
+                                    .font(.caption)
+                                    .foregroundColor(.gray)
+                                    .padding(.vertical, 10)
+                            }
+                        }
+                        .padding(.vertical)
+                        .background(Color.white.opacity(0.5))
+                        .cornerRadius(20)
+                        .padding(.horizontal)
+                        
+                        // Last Command Display
+                        if !bleManager.lastCommand.isEmpty {
+                            Text("Last command: \(bleManager.lastCommand)")
                                 .font(.caption)
                                 .foregroundColor(.gray)
-                        }
-                        
-                        // Motor Status
-                        if bleManager.isConnected {
-                            Text("Motor: \(bleManager.motorStatus)")
-                                .font(.caption)
-                                .fontWeight(.semibold)
-                                .foregroundColor(.blue)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 4)
-                                .background(Color.blue.opacity(0.1))
-                                .cornerRadius(12)
+                                .padding(.bottom, 10)
                         }
                     }
-                    .padding(.horizontal)
-                    .padding(.vertical, 8)
-                    .background(Color.white.opacity(0.5))
-                    .cornerRadius(20)
-                }
-                .padding(.top, 20)
-                
-                Spacer()
-                
-                // Motor Control Buttons
-                VStack(spacing: 25) {
-                    Text("Motor Control")
-                        .font(.title2)
-                        .fontWeight(.semibold)
-                        .foregroundColor(.brown)
-                    
-                    // 3 Main Motor Buttons
-                    VStack(spacing: 20) {
-                        // Start Button
-                        MotorButton(
-                            title: "START",
-                            icon: "play.fill",
-                            color: .green,
-                            isEnabled: bleManager.isConnected
-                        ) {
-                            bleManager.sendCommand("start")
-                        }
-                        
-                        // Stop Button
-                        MotorButton(
-                            title: "STOP",
-                            icon: "stop.fill",
-                            color: .red,
-                            isEnabled: bleManager.isConnected
-                        ) {
-                            bleManager.sendCommand("stop")
-                        }
-                        
-                        // Reverse Button
-                        MotorButton(
-                            title: "REVERSE",
-                            icon: "arrow.left.arrow.right",
-                            color: .blue,
-                            isEnabled: bleManager.isConnected && bleManager.motorStatus != "IDLE"
-                        ) {
-                            bleManager.sendCommand("reverse")
-                        }
-                    }
-                    .padding(.horizontal)
-                }
-                
-                Spacer()
-                
-                // Last command display
-                if !bleManager.lastCommand.isEmpty {
-                    Text("Last: \(bleManager.lastCommand)")
-                        .font(.caption)
-                        .foregroundColor(.gray)
-                        .padding(.bottom, 20)
                 }
             }
-            .padding()
-        }
-        .alert(isPresented: $showingAlert) {
-            Alert(title: Text("Connection Status"), message: Text(alertMessage), dismissButton: .default(Text("OK")))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button(action: {
+                        bleManager.sendCommand("status")
+                    }) {
+                        Image(systemName: "arrow.clockwise")
+                            .foregroundColor(bleManager.isConnected ? .blue : .gray)
+                    }
+                    .disabled(!bleManager.isConnected)
+                }
+            }
         }
     }
 }
 
-// MARK: - Motor Button Style
+// MARK: - Supporting Views
+struct StatusBadge: View {
+    let title: String
+    let value: String
+    let color: Color
+    
+    var body: some View {
+        VStack(spacing: 4) {
+            Text(title)
+                .font(.caption2)
+                .foregroundColor(.gray)
+            Text(value)
+                .font(.caption)
+                .fontWeight(.semibold)
+                .foregroundColor(value == "ACTIVE" ? .red : color)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(color.opacity(0.1))
+        .cornerRadius(8)
+    }
+}
+
+struct TimePickerRow: View {
+    let title: String
+    let icon: String
+    let color: Color
+    @Binding var time: Date
+    let onChanged: () -> Void
+    
+    var body: some View {
+        HStack {
+            Image(systemName: icon)
+                .foregroundColor(color)
+                .font(.title2)
+            
+            Text(title)
+                .font(.headline)
+                .foregroundColor(.brown)
+            
+            Spacer()
+            
+            DatePicker("", selection: $time, displayedComponents: .hourAndMinute)
+                .labelsHidden()
+                .onChange(of: time) { oldValue, newValue in
+                    onChanged()
+                }
+        }
+        .padding()
+        .background(Color.white.opacity(0.6))
+        .cornerRadius(12)
+    }
+}
+
 struct MotorButton: View {
     let title: String
     let icon: String
@@ -342,24 +560,24 @@ struct MotorButton: View {
     
     var body: some View {
         Button(action: action) {
-            HStack {
+            VStack(spacing: 8) {
                 Image(systemName: icon)
-                    .font(.system(size: 30))
+                    .font(.system(size: 35))
                 Text(title)
-                    .font(.title2)
+                    .font(.headline)
                     .fontWeight(.bold)
             }
             .foregroundColor(.white)
-            .padding(.vertical, 20)
+            .padding(.vertical, 15)
             .frame(maxWidth: .infinity)
             .background(
                 LinearGradient(
-                    colors: isEnabled ? [color, color.opacity(0.7)] : [Color.gray, Color.gray.opacity(0.7)],
+                    colors: isEnabled ? [color, color.opacity(0.7)] : [Color.gray, Color.gray.opacity(0.6)],
                     startPoint: .top,
                     endPoint: .bottom
                 )
             )
-            .cornerRadius(20)
+            .cornerRadius(15)
             .shadow(color: isEnabled ? color.opacity(0.3) : Color.clear, radius: 5, x: 0, y: 5)
         }
         .disabled(!isEnabled)
