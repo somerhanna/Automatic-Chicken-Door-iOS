@@ -1,4 +1,4 @@
-// Updated 4/9/26 11 am
+//  Updated 4/11/26 7 am
 //  ContentView.swift
 //  ChickenAppiOS
 //
@@ -309,9 +309,124 @@ extension BLEManager: CBPeripheralDelegate {
     }
 }
 
+// MARK: - Modal Time Picker (Forced Confirmation)
+struct ModalTimePicker: View {
+    @Binding var currentTime: Date
+    let title: String
+    let icon: String
+    let color: Color
+    let onSave: (Date) -> Void
+    
+    @Environment(\.dismiss) var dismiss
+    @State private var tempTime: Date
+    
+    init(currentTime: Binding<Date>, title: String, icon: String, color: Color, onSave: @escaping (Date) -> Void) {
+        self._currentTime = currentTime
+        self.title = title
+        self.icon = icon
+        self.color = color
+        self.onSave = onSave
+        self._tempTime = State(initialValue: currentTime.wrappedValue)
+    }
+    
+    var body: some View {
+        NavigationView {
+            ZStack {
+                // Background
+                Color(.systemGroupedBackground)
+                    .ignoresSafeArea()
+                
+                VStack(spacing: 30) {
+                    // Icon and Title
+                    VStack(spacing: 15) {
+                        Image(systemName: icon)
+                            .font(.system(size: 60))
+                            .foregroundColor(color)
+                        
+                        Text(title)
+                            .font(.title2)
+                            .fontWeight(.semibold)
+                            .foregroundColor(.brown)
+                    }
+                    .padding(.top, 40)
+                    
+                    // Time Picker
+                    DatePicker("", selection: $tempTime, displayedComponents: .hourAndMinute)
+                        .datePickerStyle(.wheel)
+                        .labelsHidden()
+                        .frame(height: 200)
+                        .environment(\.locale, Locale(identifier: "en_US"))
+                    
+                    Spacer()
+                }
+                .padding()
+            }
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Cancel") {
+                        dismiss()
+                    }
+                    .foregroundColor(.red)
+                }
+                
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Save") {
+                        onSave(tempTime)
+                        dismiss()
+                    }
+                    .fontWeight(.semibold)
+                    .foregroundColor(.blue)
+                }
+            }
+        }
+        .presentationDetents([.height(400)])
+        .presentationDragIndicator(.visible)
+    }
+}
+
+// MARK: - Time Display Row
+struct TimeDisplayRow: View {
+    let title: String
+    let icon: String
+    let color: Color
+    let time: Date
+    let onTap: () -> Void
+    
+    var body: some View {
+        Button(action: onTap) {
+            HStack {
+                Image(systemName: icon)
+                    .foregroundColor(color)
+                    .font(.title2)
+                
+                Text(title)
+                    .font(.headline)
+                    .foregroundColor(.brown)
+                
+                Spacer()
+                
+                Text(time.formatted(date: .omitted, time: .shortened))
+                    .font(.body)
+                    .foregroundColor(.blue)
+                
+                Image(systemName: "chevron.right")
+                    .font(.caption)
+                    .foregroundColor(.gray)
+            }
+            .padding()
+            .background(Color.white.opacity(0.6))
+            .cornerRadius(12)
+        }
+        .buttonStyle(PlainButtonStyle())
+    }
+}
+
 // MARK: - Main View
 struct ContentView: View {
     @StateObject private var bleManager = BLEManager()
+    @State private var showingOpenPicker = false
+    @State private var showingClosePicker = false
     
     var body: some View {
         NavigationView {
@@ -438,24 +553,24 @@ struct ContentView: View {
                             
                             if bleManager.doorSchedule.isEnabled {
                                 VStack(spacing: 15) {
-                                    // Open Time Picker
-                                    TimePickerRow(
+                                    // Open Time Row - Tappable
+                                    TimeDisplayRow(
                                         title: "Open Time",
                                         icon: "sunrise.fill",
                                         color: .orange,
-                                        time: $bleManager.doorSchedule.openTime
+                                        time: bleManager.doorSchedule.openTime
                                     ) {
-                                        bleManager.sendSchedule()
+                                        showingOpenPicker = true
                                     }
                                     
-                                    // Close Time Picker
-                                    TimePickerRow(
+                                    // Close Time Row - Tappable
+                                    TimeDisplayRow(
                                         title: "Close Time",
                                         icon: "sunset.fill",
                                         color: .purple,
-                                        time: $bleManager.doorSchedule.closeTime
+                                        time: bleManager.doorSchedule.closeTime
                                     ) {
-                                        bleManager.sendSchedule()
+                                        showingClosePicker = true
                                     }
                                 }
                                 .padding(.horizontal)
@@ -494,6 +609,28 @@ struct ContentView: View {
                 }
             }
         }
+        .sheet(isPresented: $showingOpenPicker) {
+            ModalTimePicker(
+                currentTime: $bleManager.doorSchedule.openTime,
+                title: "Set Opening Time",
+                icon: "sunrise.fill",
+                color: .orange
+            ) { newTime in
+                bleManager.doorSchedule.openTime = newTime
+                bleManager.sendSchedule()
+            }
+        }
+        .sheet(isPresented: $showingClosePicker) {
+            ModalTimePicker(
+                currentTime: $bleManager.doorSchedule.closeTime,
+                title: "Set Closing Time",
+                icon: "sunset.fill",
+                color: .purple
+            ) { newTime in
+                bleManager.doorSchedule.closeTime = newTime
+                bleManager.sendSchedule()
+            }
+        }
     }
 }
 
@@ -517,37 +654,6 @@ struct StatusBadge: View {
         .padding(.vertical, 4)
         .background(color.opacity(0.1))
         .cornerRadius(8)
-    }
-}
-
-struct TimePickerRow: View {
-    let title: String
-    let icon: String
-    let color: Color
-    @Binding var time: Date
-    let onChanged: () -> Void
-    
-    var body: some View {
-        HStack {
-            Image(systemName: icon)
-                .foregroundColor(color)
-                .font(.title2)
-            
-            Text(title)
-                .font(.headline)
-                .foregroundColor(.brown)
-            
-            Spacer()
-            
-            DatePicker("", selection: $time, displayedComponents: .hourAndMinute)
-                .labelsHidden()
-                .onChange(of: time) { oldValue, newValue in
-                    onChanged()
-                }
-        }
-        .padding()
-        .background(Color.white.opacity(0.6))
-        .cornerRadius(12)
     }
 }
 
