@@ -1,4 +1,4 @@
-Automatic Chicken Door IOS is a simple and lightweight iOS application designed to connect to an automatic chicken door IoT device.
+Automatic Chicken Door IOS is a simple and lightweight iOS application designed to wirelessly configure or control an automatic chicken door IoT device.
 
 The main funcitonality of the app includes setting the opening and close time of the door, as well as giving users a wireless and 
 manual open and close.
